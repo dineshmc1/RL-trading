@@ -3,6 +3,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+from hmmlearn.hmm import GaussianHMM
 from utils import Logger
 
 class DataLoader:
@@ -53,10 +54,31 @@ class DataLoader:
         df.dropna(inplace=True)
         return df
 
+    def _add_hmm_regimes(self, df, n_regimes=3):
+        """Add market regimes using Hidden Markov Model."""
+        Logger.info(f"Detecting {n_regimes} market regimes using HMM...")
+        
+        # Features for HMM: Log Returns and Volatility (using rolling std of returns)
+        returns = df['Log_Returns'].values.reshape(-1, 1)
+        volatility = df['Log_Returns'].rolling(window=20).std().fillna(0).values.reshape(-1, 1)
+        
+        hmm_features = np.column_stack([returns, volatility])
+        
+        # Fit HMM
+        model = GaussianHMM(n_components=n_regimes, covariance_type="full", n_iter=1000, random_state=42)
+        model.fit(hmm_features)
+        
+        # Predict regimes
+        regimes = model.predict(hmm_features)
+        df['Regime'] = regimes
+        
+        return df
+
     def prepare_data(self, symbol):
         """Full pipeline: download -> indicators -> split."""
         df = self.download_data(symbol)
         df = self.add_indicators(df)
+        df = self._add_hmm_regimes(df)
         
         # Time-based split
         train_size = int(len(df) * 0.7)
@@ -69,7 +91,7 @@ class DataLoader:
         # Features for scaling
         feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 
                         'RSI', 'MACD', 'MACD_signal', 'MACD_hist', 
-                        'EMA_20', 'EMA_50', 'ATR']
+                        'EMA_20', 'EMA_50', 'ATR', 'Regime']
         
         scaler = StandardScaler()
         train_scaled = scaler.fit_transform(train_df[feature_cols])

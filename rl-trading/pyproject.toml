@@ -14,4 +14,5 @@ dependencies = [
     "yfinance>=0.2.0",
     "pandas-ta>=0.3.14b0",
     "scikit-learn>=1.3.0",
+    "hmmlearn>=0.3.0",
 ]

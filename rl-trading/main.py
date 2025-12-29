@@ -10,13 +10,13 @@ from utils import set_all_seeds, create_dirs, Logger
 import numpy as np
 import matplotlib.pyplot as plt
 
-def train_asset(symbol, start_date, end_date, timesteps=20000):
-    Logger.info(f"--- Training Agent for {symbol} ---")
+def train_asset(symbol, start_date, end_date, timesteps=20000, reward_type='sortino'):
+    Logger.info(f"--- Training Agent for {symbol} (Reward: {reward_type}) ---")
     loader = DataLoader([symbol], start_date, end_date)
     data = loader.prepare_data(symbol)
     train_df, train_scaled = data['train']
     
-    env = TradingEnv(train_df, train_scaled, window_size=30)
+    env = TradingEnv(train_df, train_scaled, window_size=30, reward_type=reward_type)
     agent = RLAgent(env)
     agent.train(total_timesteps=timesteps)
     
@@ -27,15 +27,15 @@ def train_asset(symbol, start_date, end_date, timesteps=20000):
     Logger.info(f"Model saved to {model_path}")
 
 def compute_metrics(equity_curve, buy_and_hold_equity):
-    total_return = (equity_curve[-1] - equity_curve[0]) / equity_curve[0]
-    bh_return = (buy_and_hold_equity[-1] - buy_and_hold_equity[0]) / buy_and_hold_equity[0]
+    total_return = (equity_curve[-1] - equity_curve[0]) / (equity_curve[0] + 1e-6)
+    bh_return = (buy_and_hold_equity[-1] - buy_and_hold_equity[0]) / (buy_and_hold_equity[0] + 1e-6)
     
     daily_returns = pd.Series(equity_curve).pct_change().dropna()
     vol = daily_returns.std() * np.sqrt(252)
-    sharpe = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)) if daily_returns.std() != 0 else 0
+    sharpe = (daily_returns.mean() / (daily_returns.std() + 1e-6) * np.sqrt(252))
     
     peak = pd.Series(equity_curve).cummax()
-    drawdown = (pd.Series(equity_curve) - peak) / peak
+    drawdown = (pd.Series(equity_curve) - peak) / (peak + 1e-6)
     max_dd = drawdown.min()
     
     return {
@@ -72,7 +72,7 @@ def run_evaluation(symbol, start_date, end_date):
         actions.append(action)
         equities.append(info['equity'])
     
-    bh_shares = env.initial_balance / test_df['Close'].iloc[0]
+    bh_shares = env.initial_balance / (test_df['Close'].iloc[0] + 1e-6)
     bh_equity = test_df['Close'] * bh_shares
     
     metrics = compute_metrics(equities, bh_equity.values)
@@ -104,6 +104,7 @@ def plot_results(symbol, df, equities, bh_equity, actions):
 def main():
     parser = argparse.ArgumentParser(description="RL Trading System")
     parser.add_argument("--mode", type=str, choices=["train", "eval", "both"], default="both", help="Mode: train, eval, or both")
+    parser.add_argument("--reward", type=str, choices=["return", "sharpe", "sortino"], default="sortino", help="Reward function type")
     parser.add_argument("--assets", nargs="+", default=["BTC-USD", "ETH-USD", "AAPL", "NVDA", "GOOGL"], help="Assets to process")
     parser.add_argument("--timesteps", type=int, default=20000, help="Training timesteps")
     args = parser.parse_args()
@@ -114,7 +115,7 @@ def main():
 
     if args.mode in ["train", "both"]:
         for asset in args.assets:
-            train_asset(asset, start_date, end_date, timesteps=args.timesteps)
+            train_asset(asset, start_date, end_date, timesteps=args.timesteps, reward_type=args.reward)
 
     if args.mode in ["eval", "both"]:
         results = []
