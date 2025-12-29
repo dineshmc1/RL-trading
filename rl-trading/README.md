@@ -1,26 +1,30 @@
-# RL Trading System with HMM Regime Detection
+# Advanced RL Trading System with Probabilistic Regime Detection
 
-A sophisticated end-to-end Reinforcement Learning (RL) trading framework equipped with Hidden Markov Model (HMM) for market regime detection. This system trains autonomous agents to navigate financial markets by adapting their strategies to different market conditions.
+An professional-grade Reinforcement Learning (RL) trading framework featuring continuous action spaces, leak-proof Hidden Markov Models (HMM) for regime detection, and risk-aware logarithmic reward functions.
 
 ## Overview
 
-This project implements a custom Gymnasium-based trading environment where RL agents (using Stable-Baselines3) learn to trade various assets (Cryptocurrencies and Stocks). The system leverages advanced technical analysis and machine learning techniques to provide the agent with a comprehensive view of market dynamics.
+This system leverages State-of-the-Art (SOTA) techniques in Reinforcement Learning to navigate financial markets. Unlike traditional discrete trading bots, this agent learns a continuous policy, allowing for precise position sizing and dynamic exposure management across Cryptocurrencies and Equities.
 
-### Key Capabilities
-- **Multi-Asset Training**: Supports training across diverse symbols including BTC-USD, ETH-USD, AAPL, NVDA, and GOOGL.
-- **HMM Regime Detection**: Automatically identifies market regimes (e.g., Bull, Bear, Sideways) using Gaussian Hidden Markov Models, providing the agent with context-aware features.
-- **Flexible Reward Functions**: Support for various risk-adjusted reward metrics including Sharpe Ratio, Sortino Ratio, and Log Returns.
-- **Automated Pipeline**: End-to-end workflow from data acquisition to feature engineering, model training, and performance evaluation.
+### Core Upgrades & Features
+- **Continuous Action Space**: The agent operates in a continuous domain `[-1, 1]`, enabling smooth transitions between Fully Short (-1.0), Flat (0.0), and Fully Long (+1.0) positions.
+- **Probabilistic Regime Detection**: Utilizes Gaussian Hidden Markov Models (HMM) to output probability distributions across 3 market regimes (Bull, Bear, Sideways).
+- **Leak-Proof Training Architecture**: The HMM is trained exclusively on historical training data to eliminate look-ahead bias and ensure robust out-of-sample performance.
+- **Logarithmic Reward Function**: Implements $R_t = \log(1 + r_t) - \lambda \cdot DrawdownPenalty$, providing a geometrically consistent and risk-averse objective for the agent.
+- **Advanced Feature Engineering**:
+    - **Trend Analysis**: 20-day linear regression slope and VWAP distance.
+    - **Volatility**: Realized volatility (rolling std of log returns).
+    - **Regime Context**: Probabilistic signals, regime duration, and state-specific statistics.
 
 ---
 
 ## Technology Stack
 
-- **Core Logic**: Python 3.12+
 - **Reinforcement Learning**: `Stable-Baselines3` (PPO), `Gymnasium`
-- **Machine Learning**: `hmmlearn` (Regime Detection), `scikit-learn`
-- **Data & Indicators**: `yfinance`, `pandas-ta`
-- **Analysis & Viz**: `matplotlib`, `pandas`, `numpy`
+- **Probabilistic Modeling**: `hmmlearn` (Gaussian HMM)
+- **Technical Analysis**: `pandas-ta` (RSI, MACD, VWAP, ATR)
+- **Data Pipeline**: `yfinance`, `scikit-learn` (Standard Scaling, Linear Regression)
+- **Visualization**: `matplotlib` (Multi-panel equity and position charts)
 
 ---
 
@@ -28,36 +32,33 @@ This project implements a custom Gymnasium-based trading environment where RL ag
 
 ```text
 rl-trading/
-├── agent.py          # RL Agent wrapper (SB3 integration)
-├── data_loader.py    # Data acquisition, indicators, and HMM regimes
-├── env.py            # Custom Gymnasium trading environment
-├── main.py           # Entry point for training and evaluation
-├── utils.py          # Logging and helper utilities
-├── models/           # Persistent storage for trained models
-└── plots/            # Generated performance visualizations
+├── agent.py          # SB3 PPO Agent wrapper for continuous policies
+├── data_loader.py    # Feature engineering & Leak-proof HMM pipeline
+├── env.py            # Continuous Gymnasium environment with Log rewards
+├── main.py           # CLI for training, evaluation, and visualization
+├── utils.py          # Logging and directory management
+├── models/           # Serialized RL model weights (.zip)
+└── plots/            # High-fidelity performance visualizations
 ```
 
 ---
 
 ## Installation
 
-1. **Clone the repository**:
+1. **Clone and Navigate**:
    ```bash
    git clone <repository-url>
    cd rl-trading
    ```
 
-2. **Set up the environment**:
-   It is recommended to use a virtual environment.
+2. **Environment Setup**:
    ```bash
    python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   source .venv/bin/activate  # Windows: .venv\Scripts\activate
    ```
 
-3. **Install dependencies**:
+3. **Install Dependencies**:
    ```bash
-   pip install -r requirements.txt
-   # OR if using the provided pyproject.toml
    pip install .
    ```
 
@@ -65,40 +66,39 @@ rl-trading/
 
 ## Usage
 
-The system is controlled via a command-line interface in `main.py`.
-
-### 1. Training and Evaluation (Default)
-To train agents on all default assets (BTC, ETH, AAPL, NVDA, GOOGL) and evaluate them immediately:
+### 1. Unified Pipeline (Train & Eval)
+Train agents on default assets (BTC, ETH, AAPL, NVDA, GOOGL) and generate evaluation reports:
 ```bash
-python main.py --mode both --reward sortino
+python main.py --mode both --timesteps 50000 --reward sortino
 ```
 
-### 2. Specific Asset Training
-To train only on specific assets with a set number of timesteps:
+### 2. Targeted Training
+Train a specific asset with a custom timeline:
 ```bash
-python main.py --mode train --assets BTC-USD AAPL --timesteps 50000
+python main.py --mode train --assets BTC-USD --timesteps 100000
 ```
 
-### 3. Evaluation Only
-To evaluate existing models and generate performance plots:
+### 3. Comprehensive Evaluation
+Run evaluation on existing models to generate the 3-panel performance plots:
 ```bash
-python main.py --mode eval --assets BTC-USD
+python main.py --mode eval --assets AAPL NVDA
 ```
 
 ---
 
-## Performance Metrics
+## Performance Analysis
 
 The system generates a comprehensive performance report for each evaluation run, including:
+- **Trading Years**: The exact duration of the evaluation period.
 - **Total Return**: Cumulative P&L of the RL strategy.
-- **Buy & Hold Comparison**: Benchmark against a simple holding strategy.
+- **Annualized Return (%)**: The geometric average annual return.
+- **Buy & Hold Comparison**: Benchmark against a simple holding strategy (Total and Annualized).
 - **Sharpe/Sortino Ratio**: Risk-adjusted performance metrics.
 - **Max Drawdown**: Maximum peak-to-trough decline.
-
-Visual results are saved in the `plots/` directory, showing the equity curve and specific trading actions (Buy/Sell) overlaid on the price chart.
+3. **Target Position**: A filled area chart showing the agent's exact fractional exposure (Long vs. Short) over time.
 
 ---
 
 ## Disclaimer
 
-*This project is for educational purposes only. Trading involves significant risk. The authors are not responsible for any financial losses incurred from using this software.*
+*This project is for research and educational purposes only. Financial trading involves significant risk of loss. The authors do not guarantee any results and are not liable for financial outcomes.*

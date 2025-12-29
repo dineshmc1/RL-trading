@@ -26,9 +26,19 @@ def train_asset(symbol, start_date, end_date, timesteps=20000, reward_type='sort
     agent.save(model_path)
     Logger.info(f"Model saved to {model_path}")
 
-def compute_metrics(equity_curve, buy_and_hold_equity):
+def compute_metrics(equity_curve, buy_and_hold_equity, df):
+    # Duration in years
+    start_date = df.index[0]
+    end_date = df.index[-1]
+    duration_days = (end_date - start_date).days
+    trading_years = duration_days / 365.25
+    
     total_return = (equity_curve[-1] - equity_curve[0]) / (equity_curve[0] + 1e-6)
     bh_return = (buy_and_hold_equity[-1] - buy_and_hold_equity[0]) / (buy_and_hold_equity[0] + 1e-6)
+    
+    # Annualized Return (Geometric)
+    annualized_return = (1 + total_return)**(1 / trading_years) - 1 if trading_years > 0 else 0
+    bh_annualized_return = (1 + bh_return)**(1 / trading_years) - 1 if trading_years > 0 else 0
     
     daily_returns = pd.Series(equity_curve).pct_change().dropna()
     vol = daily_returns.std() * np.sqrt(252)
@@ -39,8 +49,11 @@ def compute_metrics(equity_curve, buy_and_hold_equity):
     max_dd = drawdown.min()
     
     return {
+        "Trading Years": trading_years,
         "Total Return (%)": total_return * 100,
+        "Annualized Return (%)": annualized_return * 100,
         "B&H Return (%)": bh_return * 100,
+        "B&H Annualized (%)": bh_annualized_return * 100,
         "Annualized Vol": vol,
         "Sharpe Ratio": sharpe,
         "Max Drawdown": max_dd
@@ -75,27 +88,48 @@ def run_evaluation(symbol, start_date, end_date):
     bh_shares = env.initial_balance / (test_df['Close'].iloc[0] + 1e-6)
     bh_equity = test_df['Close'] * bh_shares
     
-    metrics = compute_metrics(equities, bh_equity.values)
-    plot_results(symbol, test_df, equities, bh_equity, actions)
+    metrics = compute_metrics(equities, bh_equity.values, test_df)
+    
+    # Track positions for plotting
+    obs, _ = env.reset()
+    positions = []
+    for action in actions:
+        positions.append(action[0])
+        
+    plot_results(symbol, test_df, equities, bh_equity, positions)
     return metrics
 
-def plot_results(symbol, df, equities, bh_equity, actions):
+def plot_results(symbol, df, equities, bh_equity, positions):
     create_dirs(["plots"])
-    plt.figure(figsize=(15, 10))
-    plt.subplot(2, 1, 1)
-    plt.plot(equities, label='RL Agent Equity', color='blue')
+    plt.figure(figsize=(15, 12))
+    
+    # 1. Equity Curve
+    plt.subplot(3, 1, 1)
+    plt.plot(equities, label='RL Agent Equity', color='blue', linewidth=2)
     plt.plot(bh_equity.values, label='Buy & Hold Equity', color='orange', linestyle='--')
     plt.title(f"Equity Curve - {symbol}")
-    plt.legend(); plt.grid(True)
+    plt.ylabel("Portfolio Value")
+    plt.legend(); plt.grid(True, alpha=0.3)
     
-    plt.subplot(2, 1, 2)
-    plt.plot(df['Close'].values, label='Price', color='gray', alpha=0.5)
-    buy_indices = [i for i, a in enumerate(actions) if a == 1]
-    sell_indices = [i for i, a in enumerate(actions) if a == 2]
-    plt.scatter(buy_indices, df['Close'].iloc[buy_indices], marker='^', color='green', label='Buy')
-    plt.scatter(sell_indices, df['Close'].iloc[sell_indices], marker='v', color='red', label='Sell')
-    plt.title(f"Trading Actions - {symbol}")
-    plt.legend(); plt.grid(True)
+    # 2. Price and Markers (Markers for significant position changes)
+    plt.subplot(3, 1, 2)
+    plt.plot(df['Close'].values, label='Price', color='black', alpha=0.7)
+    plt.title(f"Price Action - {symbol}")
+    plt.ylabel("Price")
+    plt.grid(True, alpha=0.3)
+    
+    # 3. Target Position (Continuous)
+    plt.subplot(3, 1, 3)
+    plt.fill_between(range(len(positions)), positions, 0, 
+                     where=np.array(positions) >= 0, color='green', alpha=0.3, label='Long')
+    plt.fill_between(range(len(positions)), positions, 0, 
+                     where=np.array(positions) < 0, color='red', alpha=0.3, label='Short')
+    plt.plot(positions, color='purple', linewidth=1, label='Target Position')
+    plt.axhline(0, color='black', linewidth=0.8)
+    plt.title(f"RL Agent Position - {symbol}")
+    plt.ylabel("Position (-1 to 1)")
+    plt.ylim(-1.1, 1.1)
+    plt.legend(); plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(f"plots/results_{symbol.replace('-', '_')}.png")

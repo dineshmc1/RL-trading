@@ -1,8 +1,9 @@
 import yfinance as yf
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
-import numpy as np
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
 from hmmlearn.hmm import GaussianHMM
 from utils import Logger
 
@@ -43,44 +44,89 @@ class DataLoader:
         df['EMA_20'] = ta.ema(df['Close'], length=20)
         df['EMA_50'] = ta.ema(df['Close'], length=50)
         
-        # Volatility (ATR)
-        df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-        
-        # Returns
+        # Log Returns and Std Returns
         df['Returns'] = df['Close'].pct_change()
         df['Log_Returns'] = np.log(df['Close'] / df['Close'].shift(1))
+        
+        # Volatility (Realized Vol)
+        df['Realized_Vol'] = df['Log_Returns'].rolling(window=20).std()
+        
+        # VWAP Distance
+        df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+        df['VWAP_Dist'] = (df['Close'] - df['VWAP']) / df['VWAP']
+        
+        # Trend Slope (20-day linear regression slope)
+        def get_slope(array):
+            y = array
+            x = np.arange(len(y)).reshape(-1, 1)
+            model = LinearRegression().fit(x, y)
+            return model.coef_[0]
+            
+        df['Trend_Slope'] = df['Close'].rolling(window=20).apply(get_slope, raw=True)
         
         # Drop rows with NaN from indicators
         df.dropna(inplace=True)
         return df
 
-    def _add_hmm_regimes(self, df, n_regimes=3):
-        """Add market regimes using Hidden Markov Model."""
-        Logger.info(f"Detecting {n_regimes} market regimes using HMM...")
+    def _add_hmm_regimes(self, df, train_df, n_regimes=3):
+        """Add market regimes using Hidden Markov Model, trained on train_df."""
+        Logger.info(f"Fitting HMM on training data ({len(train_df)} points)...")
         
-        # Features for HMM: Log Returns and Volatility (using rolling std of returns)
-        returns = df['Log_Returns'].values.reshape(-1, 1)
-        volatility = df['Log_Returns'].rolling(window=20).std().fillna(0).values.reshape(-1, 1)
+        def extract_features(data):
+            # Same features as before: Returns and Realized Vol
+            rets = data['Log_Returns'].values.reshape(-1, 1)
+            vol = data['Realized_Vol'].values.reshape(-1, 1)
+            return np.column_stack([rets, vol])
+            
+        train_features = extract_features(train_df)
+        all_features = extract_features(df)
         
-        hmm_features = np.column_stack([returns, volatility])
-        
-        # Fit HMM
+        # Fit HMM on training data only
         model = GaussianHMM(n_components=n_regimes, covariance_type="full", n_iter=1000, random_state=42)
-        model.fit(hmm_features)
+        model.fit(train_features)
         
-        # Predict regimes
-        regimes = model.predict(hmm_features)
+        # Probabilistic output
+        probs = model.predict_proba(all_features)
+        for i in range(n_regimes):
+            df[f'Regime_Prob_{i}'] = probs[:, i]
+            
+        # Regime ID for duration/vol/trend calculations
+        regimes = model.predict(all_features)
         df['Regime'] = regimes
         
-        return df
+        # Regime Duration
+        df['Regime_Duration'] = df.groupby((df['Regime'] != df['Regime'].shift()).cumsum()).cumcount() + 1
+        
+        # Regime Specific Stats (for expansion)
+        # Note: These are slightly redundant with the probabilities but requested
+        for i in range(n_regimes):
+            # Example: Mean vol for this regime state
+            state_vol = np.sqrt(model.covars_[i][1,1]) # Index 1 is Realized_Vol
+            state_trend = model.means_[i][0] # Index 0 is Log_Returns
+            df.loc[df['Regime'] == i, 'Regime_Vol_State'] = state_vol
+            df.loc[df['Regime'] == i, 'Regime_Trend_State'] = state_trend
+
+        return df, model
 
     def prepare_data(self, symbol):
         """Full pipeline: download -> indicators -> split."""
         df = self.download_data(symbol)
         df = self.add_indicators(df)
-        df = self._add_hmm_regimes(df)
         
-        # Time-based split
+        # Initial drop for indicator windows
+        df.dropna(inplace=True)
+        
+        # Time-based split for HMM training
+        train_size = int(len(df) * 0.7)
+        train_df_for_hmm = df.iloc[:train_size]
+        
+        # Fit HMM on train data only
+        df, hmm_model = self._add_hmm_regimes(df, train_df_for_hmm)
+        
+        # Second drop for HMM or other rolling features
+        df.dropna(inplace=True)
+        
+        # Re-split after indicator/hmm addition
         train_size = int(len(df) * 0.7)
         val_size = int(len(df) * 0.15)
         
@@ -88,10 +134,15 @@ class DataLoader:
         val_df = df.iloc[train_size : train_size + val_size]
         test_df = df.iloc[train_size + val_size :]
         
-        # Features for scaling
-        feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 
-                        'RSI', 'MACD', 'MACD_signal', 'MACD_hist', 
-                        'EMA_20', 'EMA_50', 'ATR', 'Regime']
+        # Final Feature List as requested
+        feature_cols = [
+            'Log_Returns', 'Realized_Vol', 'RSI', 'MACD', 
+            'VWAP_Dist', 'Trend_Slope', 
+            'Regime_Prob_0', 'Regime_Prob_1', 'Regime_Prob_2'
+        ]
+        
+        # Check for any missing columns (e.g. if n_regimes != 3)
+        feature_cols = [c for c in feature_cols if c in df.columns]
         
         scaler = StandardScaler()
         train_scaled = scaler.fit_transform(train_df[feature_cols])
