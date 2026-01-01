@@ -2,35 +2,63 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import pandas as pd
+import random
 
 class TradingEnv(gym.Env):
     """
     Custom Trading Environment for Gymnasium
     Actions: 0 (Hold), 1 (Buy/Long), 2 (Sell/Short)
+    Supports Multi-Asset training with Asset Embeddings.
     """
     metadata = {'render_modes': ['human']}
 
-    def __init__(self, df, scaled_data, window_size=30, initial_balance=10000, transaction_cost=0.001, reward_type='sortino'):
+    def __init__(self, data_dict, defined_assets=None, window_size=30, initial_balance=10000, 
+                 transaction_cost=0.001, reward_type='sortino', 
+                 random_start=True, randomize_cost=False):
         super(TradingEnv, self).__init__()
 
-        self.df = df
-        self.scaled_data = scaled_data
+        # Handle both single asset (dict or not) and multi-asset dicts
+        if not isinstance(data_dict, dict) or 'train' in data_dict: 
+             pass 
+
+        self.data_dict = data_dict # {Symbol: (df, scaled_data)}
+        
+        # Consistent Asset Universe (for Embeddings)
+        if defined_assets is not None:
+            self.assets = defined_assets
+        else:
+            self.assets = list(data_dict.keys())
+            
+        # Assets available for active sampling in this env instance
+        self.active_assets = [a for a in self.data_dict.keys() if a in self.assets]
+        if not self.active_assets:
+            raise ValueError("No active assets found in data_dict matching defined_assets.")
+
+        self.num_assets = len(self.assets)
+        self.asset_mapping = {symbol: i for i, symbol in enumerate(self.assets)}
+        
         self.window_size = window_size
         self.initial_balance = initial_balance
-        self.transaction_cost = transaction_cost
-        self.reward_type = reward_type # 'return', 'sharpe', or 'sortino'
+        self.base_transaction_cost = transaction_cost
+        self.reward_type = reward_type 
+        self.random_start = random_start
+        self.randomize_cost = randomize_cost
 
-        # Action space: 0: Hold, 1: Long, 2: Short (optional, but requested as "Sell/Exit/Short")
-        # Let's implement Long, Flat, Short logic
         self.action_space = spaces.Discrete(3)
 
-        # Observation space: Window of features + portfolio state
-        # Portfolio state: [position, balance, unrealized_pnl, total_equity]
-        # features: scaled_data.shape[1]
-        num_features = scaled_data.shape[1]
+        # Observation space: 
+        # [Features (N) | Portfolio State (4) | Asset Embedding (num_assets)]
+        # We assume all active assets have same number of features
+        first_asset = self.active_assets[0]
+        _, first_scaled = self.data_dict[first_asset]
+        num_features = first_scaled.shape[1]
+        
+        # Total observation size per timestep
+        self.obs_dim = num_features + 4 + self.num_assets
+        
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
-            shape=(window_size, num_features + 4), 
+            shape=(window_size, self.obs_dim), 
             dtype=np.float32
         )
 
@@ -38,10 +66,38 @@ class TradingEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        
+        # Select asset
+        if options and 'asset' in options:
+            self.current_asset_symbol = options['asset']
+            if self.current_asset_symbol not in self.active_assets:
+                raise ValueError(f"Asset {self.current_asset_symbol} not in active assets.")
+        else:
+            self.current_asset_symbol = random.choice(self.active_assets)
+            
+        self.current_asset_idx = self.asset_mapping[self.current_asset_symbol]
+        self.df, self.scaled_data = self.data_dict[self.current_asset_symbol]
+        
         self.balance = self.initial_balance
-        self.position = 0  # 0: flat, 1: long, -1: short
+        self.position = 0 
         self.shares = 0
-        self.current_step = self.window_size
+        
+        # Random start step
+        if self.random_start and len(self.df) > self.window_size + 100:
+            max_start = len(self.df) - 100 
+            self.current_step = random.randint(self.window_size, max_start)
+        else:
+            self.current_step = self.window_size
+            
+        # Randomized Transaction Cost (Gaussian) for this episode or step?
+        # User asked for "Randomized transaction costs". Let's vary it per episode or constant?
+        # Usually per episode is good to test robustness.
+        if self.randomize_cost:
+            # Mean = base_cost, Std = base_cost * 0.2 (20% variablity)
+            self.current_transaction_cost = max(0, np.random.normal(self.base_transaction_cost, self.base_transaction_cost * 0.2))
+        else:
+            self.current_transaction_cost = self.base_transaction_cost
+
         self.history = []
         self.total_equity_history = [self.initial_balance]
         self.returns_history = []
@@ -49,12 +105,11 @@ class TradingEnv(gym.Env):
         return self._get_observation(), {}
 
     def _get_observation(self):
-        # Get window of scaled features
+        # 1. Market Features
         window_start = self.current_step - self.window_size
-        obs = self.scaled_data[window_start:self.current_step].copy()
+        obs_features = self.scaled_data[window_start:self.current_step].copy()
         
-        # Add portfolio state to each timestep in the window
-        # (normalized by initial balance for scaling consistency where applicable)
+        # 2. Portfolio State
         p_state = np.array([
             self.position,
             self.balance / self.initial_balance,
@@ -62,10 +117,20 @@ class TradingEnv(gym.Env):
             self._get_total_equity() / self.initial_balance
         ])
         
-        # Broadcast p_state to match window size
-        p_state_window = np.tile(p_state, (self.window_size, 1))
+        # 3. Asset Embedding (One-Hot)
+        embedding = np.zeros(self.num_assets)
+        embedding[self.current_asset_idx] = 1.0
         
-        full_obs = np.hstack([obs, p_state_window])
+        # Combine [Features, Portfolio, Embedding]
+        # p_state and embedding need to be tiled to match window size?
+        # Typically LSTM/Transformers need sequence. MLP policies flatten anyway.
+        # But `env` usually returns (Window, Channels/Features).
+        # So we repeat static info across the window.
+        
+        static_info = np.concatenate([p_state, embedding])
+        static_window = np.tile(static_info, (self.window_size, 1))
+        
+        full_obs = np.hstack([obs_features, static_window])
         return full_obs.astype(np.float32)
 
     def _get_unrealized_pnl(self):
@@ -81,6 +146,7 @@ class TradingEnv(gym.Env):
         elif self.position == 1:
             return self.balance + self.shares * current_price
         else: # Short
+            # Simplified short logic: Inverse of Long
             return self.balance + self.shares * current_price
 
     def step(self, action):
@@ -90,14 +156,14 @@ class TradingEnv(gym.Env):
         # Action logic
         if action == 1 and self.position != 1: # Go Long
             self.balance = self._get_total_equity()
-            cost = self.balance * self.transaction_cost
+            cost = self.balance * self.current_transaction_cost
             self.balance -= cost
             self.shares = self.balance / current_price
             self.balance = 0
             self.position = 1
         elif action == 2 and self.position != 0: # Go Flat
             self.balance = self._get_total_equity()
-            cost = self.balance * self.transaction_cost
+            cost = self.balance * self.current_transaction_cost
             self.balance -= cost
             self.shares = 0
             self.position = 0
@@ -115,14 +181,12 @@ class TradingEnv(gym.Env):
         
         reward = 0
         if self.reward_type == 'return':
-            # 1. Standard approach: log return - drawdown penalty
             log_return = np.log(current_equity / prev_equity) if prev_equity > 0 else 0
             peak = max(self.total_equity_history)
             drawdown = (peak - current_equity) / peak
             reward = log_return - (drawdown * 0.1)
             
         elif self.reward_type == 'sharpe':
-            # 2. Rolling Sharpe Ratio (approximate over window)
             if len(self.returns_history) < self.window_size:
                 reward = step_return
             else:
@@ -131,20 +195,18 @@ class TradingEnv(gym.Env):
                 reward = np.mean(window_returns) / (std + 1e-6)
                 
         elif self.reward_type == 'sortino':
-            # 3. Rolling Sortino Ratio (only penalize downside deviations)
             if len(self.returns_history) < self.window_size:
                 reward = step_return
             else:
                 window_returns = self.returns_history[-self.window_size:]
                 downside_returns = [r for r in window_returns if r < 0]
-                downside_std = np.std(downside_returns) if len(downside_returns) > 1 else (abs(min(window_returns)) if any(r < 0 for r in window_returns) else 1e-6)
+                downside_std = np.std(downside_returns) if len(downside_returns) > 1 else 1e-6
                 reward = np.mean(window_returns) / (downside_std + 1e-6)
 
-        # Truncated is used in new Gymnasium API
         truncated = False
         obs = self._get_observation() if not done else np.zeros(self.observation_space.shape)
         
         return obs, reward, done, truncated, {"equity": current_equity, "position": self.position}
 
     def render(self, mode='human'):
-        print(f"Step: {self.current_step}, Equity: {self._get_total_equity():.2f}, Position: {self.position}")
+        print(f"Step: {self.current_step}, Asset: {self.current_asset_symbol}, Equity: {self._get_total_equity():.2f}")
