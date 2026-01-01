@@ -51,9 +51,9 @@ def compute_metrics(equity_curve, buy_and_hold_equity, df):
     return {
         "Trading Years": trading_years,
         "Total Return (%)": total_return * 100,
-        "Annualized Return (%)": annualized_return * 100,
+        "CAGR (%)": annualized_return * 100,
         "B&H Return (%)": bh_return * 100,
-        "B&H Annualized (%)": bh_annualized_return * 100,
+        "B&H CAGR (%)": bh_annualized_return * 100,
         "Annualized Vol": vol,
         "Sharpe Ratio": sharpe,
         "Max Drawdown": max_dd
@@ -78,12 +78,13 @@ def run_evaluation(symbol, start_date, end_date):
     truncated = False
     actions = []
     equities = [env.initial_balance]
+    positions = []
     
     while not (done or truncated):
         action = agent.predict(obs)
         obs, reward, done, truncated, info = env.step(action)
-        actions.append(action)
         equities.append(info['equity'])
+        positions.append(info['position'])
     
     bh_shares = env.initial_balance / (test_df['Close'].iloc[0] + 1e-6)
     bh_equity = test_df['Close'] * bh_shares
@@ -91,10 +92,7 @@ def run_evaluation(symbol, start_date, end_date):
     metrics = compute_metrics(equities, bh_equity.values, test_df)
     
     # Track positions for plotting
-    obs, _ = env.reset()
-    positions = []
-    for action in actions:
-        positions.append(action[0])
+    # Already tracked in the loop above
         
     plot_results(symbol, test_df, equities, bh_equity, positions)
     return metrics

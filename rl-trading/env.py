@@ -144,7 +144,7 @@ class TradingEnv(gym.Env):
         truncated = False
         obs = self._get_observation() if not done else np.zeros(self.observation_space.shape)
         
-        return obs, reward, done, truncated, {"equity": current_equity}
+        return obs, reward, done, truncated, {"equity": current_equity, "position": self.position}
 
     def render(self, mode='human'):
         print(f"Step: {self.current_step}, Equity: {self._get_total_equity():.2f}, Position: {self.position}")
