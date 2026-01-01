@@ -64,6 +64,27 @@ class DataLoader:
             
         df['Trend_Slope'] = df['Close'].rolling(window=20).apply(get_slope, raw=True)
         
+        # --- Advanced Features ---
+        
+        # 1. Funding Proxy (Momentum Skew): (Close - MA_Short) / MA_Short
+        # Using EMA_20 as proxy for "Short Term MA"
+        df['Funding_Proxy'] = (df['Close'] - df['EMA_20']) / (df['EMA_20'] + 1e-6)
+        
+        # 2. Volatility of Volatility
+        df['Vol_of_Vol'] = df['Realized_Vol'].rolling(window=20).std()
+        
+        # 3. Time Encoding (Cyclical)
+        # Assuming Daily Data from Yahoo Finance
+        # Day of Week (0=Monday, 6=Sunday)
+        day_of_week = df.index.dayofweek
+        df['Day_Cos'] = np.cos(2 * np.pi * day_of_week / 7.0)
+        df['Day_Sin'] = np.sin(2 * np.pi * day_of_week / 7.0)
+        
+        # Day of Year (Seasonality)
+        day_of_year = df.index.dayofyear
+        df['Year_Cos'] = np.cos(2 * np.pi * day_of_year / 365.25)
+        df['Year_Sin'] = np.sin(2 * np.pi * day_of_year / 365.25)
+        
         # Drop rows with NaN from indicators
         df.dropna(inplace=True)
         return df
@@ -138,7 +159,9 @@ class DataLoader:
         feature_cols = [
             'Log_Returns', 'Realized_Vol', 'RSI', 'MACD', 
             'VWAP_Dist', 'Trend_Slope', 
-            'Regime_Prob_0', 'Regime_Prob_1', 'Regime_Prob_2'
+            'Regime_Prob_0', 'Regime_Prob_1', 'Regime_Prob_2',
+            'Funding_Proxy', 'Vol_of_Vol', 
+            'Day_Cos', 'Day_Sin', 'Year_Cos', 'Year_Sin'
         ]
         
         # Check for any missing columns (e.g. if n_regimes != 3)

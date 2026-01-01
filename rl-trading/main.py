@@ -115,7 +115,9 @@ def run_monte_carlo_eval(assets, start_date, end_date, model_name="ppo_multi_ass
         return
     
     # Dummy env for loading model
-    dummy_env = TradingEnv(test_data_dict, defined_assets=assets) 
+    # Enable Noise for Monte Carlo
+    dummy_env = TradingEnv(test_data_dict, defined_assets=assets, 
+                           random_slippage=0.001, execution_delay=1, price_noise=0.005) 
     agent = RLAgent(dummy_env, model_path=model_path)
     
     results = []
@@ -134,9 +136,14 @@ def run_monte_carlo_eval(assets, start_date, end_date, model_name="ppo_multi_ass
             done = False
             truncated = False
             
+            # RecurrentPPO State Management
+            state = None
+            episode_starts = np.ones((1,), dtype=bool)
+            
             while not (done or truncated):
-                action = agent.predict(obs)
+                action, state = agent.predict(obs, state=state, episode_start=episode_starts)
                 obs, _, done, truncated, info = dummy_env.step(action)
+                episode_starts = np.zeros((1,), dtype=bool)
             
             # Compute one-run metrics
             # We need the full history from the environment logic if we want exact CAGR
@@ -232,9 +239,12 @@ def run_walk_forward_validation(assets, start_year=2018, end_year=2024):
             if symbol not in test_data_dict_clean: continue
             obs, _ = env.reset(options={'asset': symbol})
             done = False
+            state = None
+            episode_starts = np.ones((1,), dtype=bool)
             while not done:
-                action = agent.predict(obs)
+                action, state = agent.predict(obs, state=state, episode_start=episode_starts)
                 obs, _, done, _, _ = env.step(action)
+                episode_starts = np.zeros((1,), dtype=bool)
             
             # Metrics
             df_test, _ = test_data_dict_clean[symbol]
